@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+  </head>
+  <body style="margin: 0; height: 100vh; overflow: hidden">
+    <canvas></canvas>
+  </body>
+  <script>
+    //fetch("gzdt.json")
+    var fn = (body) =>
+      fetch("https://z.overpass-api.de/api/interpreter", {
+        method: "POST",
+        body,
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      })
+        .then((a) => a.text())
+        .then((text) => {
+          const { elements } = JSON.parse(
+            text.replace(
+              /"(lat|lon)": (\d+\.\d+)/g,
+              (_, a, b) => `"${a}":"${b}"`
+            )
+          );
+
+          const node = new Map();
+          const way = new Map();
+          const relation = new Map();
+          let mainLat;
+          let mainLon;
+          const getZB = (lat) => {
+            const o = lat.split(".");
+            o[0] = Number(o[0]);
+            o[1] = Number(o[1].padEnd(7, "0"));
+            return o;
+          };
+          const readTag = (obj, tagName, attributes) => {
+            switch (tagName) {
+              case "tag":
+                obj[attributes.k.value] = attributes.v.value;
+                return;
+              case "member":
+              case "nd":
+                const type = attributes?.type?.value || "node";
+                if (!(type in obj)) {
+                  obj[type] = [];
+                }
+                obj[type].push(Number(attributes.ref.value));
+                return;
+            }
+          };
+          for (const ele of elements) {
+            if (!ele.id && !ele.ref) {
+              continue;
+            }
+            const obj = ele.tags || {};
+            //   for (const child of children) {
+            //     readTag(obj, child.tagName, child.attributes);
+            //   }
+            switch (ele.type) {
+              case "node":
+                if (!ele.lat || !ele.lon) {
+                  break;
+                }
+                const lat = getZB(ele.lat);
+                const lon = getZB(ele.lon);
+                if (mainLat === undefined && mainLon === undefined) {
+                  mainLat = lat[0];
+                  mainLon = lon[0];
+                }
+                obj.lat = (lat[0] - mainLat) * 1e7 + lat[1];
+                obj.lon = (lon[0] - mainLon) * 1e7 + lon[1];
+                node.set(ele.id, obj);
+                break;
+              case "way":
+                obj.node = ele.nodes;
+                way.set(ele.id, obj);
+                break;
+              case "relation":
+                ele.members.forEach(({ type, ref }) => {
+                  if (!obj[type]) {
+                    obj[type] = [];
+                  }
+                  obj[type].push(ref);
+                });
+                relation.set(ele.id, obj);
+                break;
+            }
+          }
+          const o = [...relation.values()].filter(
+            ({ route }) => route === "subway" //||
+            // route === "tram" ||
+            // route === "railway"
+            //  route === "train"
+          );
+          o.forEach((v) => {
+            if (v.node && !v.nodeObj) {
+              v.nodeObj = v.node.map(node.get.bind(node)).filter((a) => a);
+            }
+            if (v.way && !v.wayObj) {
+              v.wayObj = v.way.map(way.get.bind(way)).filter((a) => a);
+              v.wayObj.forEach((a) => {
+                if (a.node && !a.nodeObj) {
+                  a.nodeObj = a.node.map(node.get.bind(node)).filter((a) => a);
+                }
+              });
+            }
+          });
+          return o;
+        })
+        .then((a) => {
+          let minLat = Infinity;
+          let minLon = Infinity;
+          let maxLat = 0;
+          let maxLon = 0;
+          // a.map(({node,way})=>[...node,...way.map(({node})=>node)]).flat()
+          a.map(({ nodeObj, wayObj }) => [
+            ...(nodeObj || []),
+            ...(wayObj || []).map(({ nodeObj }) => nodeObj).flat(),
+          ])
+            .flat()
+            .forEach(({ lat, lon }) => {
+              if (lat > maxLat) {
+                maxLat = lat;
+              }
+              if (lon > maxLon) {
+                maxLon = lon;
+              }
+              if (lat < minLat) {
+                minLat = lat;
+              }
+              if (lon < minLon) {
+                minLon = lon;
+              }
+            });
+          //  console.log(minLat,maxLat,maxLat-minLat,minLon,maxLon,maxLon-minLon)
+          const canvas = document.getElementsByTagName("canvas")[0];
+          const context = canvas.getContext("2d");
+          canvas.height = canvas.parentNode.clientHeight;
+          canvas.width = canvas.parentNode.clientWidth;
+
+          const { height, width } = canvas;
+          const scale = Math.min(
+            (height - 20) / (maxLat - minLat),
+            (width - 20) / (maxLon - minLon)
+          );
+          const pointSize = Math.max(0.6, Math.min(2, 0.75));
+          console.log(scale);
+          const getXY = (lat, lon) => [
+            (lon - minLon) * scale + 10,
+            height - (lat - minLat) * scale - 10,
+          ];
+
+          for (const { wayObj, nodeObj, colour } of a) {
+            const nodeMap = new Map();
+            for (const { nodeObj } of wayObj || []) {
+              if (nodeObj.length < 2) {
+                continue;
+              }
+              context.beginPath();
+              context.strokeStyle = colour || "#000";
+              let isStart = true;
+              for (const { lat, lon, name } of nodeObj) {
+                (isStart ? context.moveTo : context.lineTo).apply(
+                  context,
+                  getXY(lat, lon)
+                );
+                isStart = false;
+                if (name) {
+                  nodeMap.set(`${lat},${lon}`, { lat, lon, name });
+                }
+              }
+              context.stroke();
+            }
+            for (const { lat, lon, name } of nodeObj || []) {
+              if (name) {
+                nodeMap.set(`${lat},${lon}`, { lat, lon, name });
+              }
+            }
+            for (const [k, { lat, lon, name }] of nodeMap) {
+              context.beginPath();
+              context.arc(...getXY(lat, lon), pointSize, 0, 2 * Math.PI);
+              // context.fillStyle = "#ff0"; //设置填充颜色
+              context.fill(); //开始填充
+              // context.fillStyle = "#000"; //设置填充颜色
+              // context.font = "16px serif";
+              // context.fillText(name, ...getXY(lat, lon));
+              context.stroke();
+            }
+            //break
+          }
+          //   console.log(...a);
+        });
+    fn(`[out:json]
+;
+relation
+  ["network"="广州地铁"];
+(
+  way(r);
+  node(w);
+  way(bn);
+  relation(bw);
+);
+out;`);
+  </script>
+</html>

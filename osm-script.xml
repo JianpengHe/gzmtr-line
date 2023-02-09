@@ -1,0 +1,12 @@
+<osm-script output="json">
+    <query type="relation">
+        <has-kv k="route" v="subway"/>
+    </query>
+    <union>
+        <recurse type="relation-way"/>
+        <recurse type="way-node"/>
+        <recurse type="node-way"/>
+        <recurse type="way-relation"/>
+    </union>
+    <print/>
+</osm-script>
