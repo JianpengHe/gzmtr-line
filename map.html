@@ -6,17 +6,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Document</title>
   </head>
-  <body style="margin: 0; height: 100vh; overflow: hidden">
-    <canvas></canvas>
+  <body style="margin: 0; overflow: hidden">
+    <div id="scale"></div>
+    <div style="position: fixed; height: 100vh; width: 100vw; left: 0; top: 0">
+      <canvas></canvas>
+    </div>
   </body>
   <script>
+    const getCoordinate = (e, key) =>
+      e[key] ?? (e.changedTouches || e.touches || [])[0][key];
     //fetch("gzdt.json")
     var fn = (body) =>
-      fetch("https://z.overpass-api.de/api/interpreter", {
-        method: "POST",
-        body,
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      })
+      // fetch("https://z.overpass-api.de/api/interpreter", {
+      //   method: "POST",
+      //   body,
+      //   headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      // })
+      fetch("Guangzhou Metro.json")
         .then((a) => a.text())
         .then((text) => {
           const { elements } = JSON.parse(
@@ -111,16 +117,17 @@
           });
           return o;
         })
-        .then((a) => {
+        .then((lineData) => {
           let minLat = Infinity;
           let minLon = Infinity;
           let maxLat = 0;
           let maxLon = 0;
           // a.map(({node,way})=>[...node,...way.map(({node})=>node)]).flat()
-          a.map(({ nodeObj, wayObj }) => [
-            ...(nodeObj || []),
-            ...(wayObj || []).map(({ nodeObj }) => nodeObj).flat(),
-          ])
+          lineData
+            .map(({ nodeObj, wayObj }) => [
+              ...(nodeObj || []),
+              ...(wayObj || []).map(({ nodeObj }) => nodeObj).flat(),
+            ])
             .flat()
             .forEach(({ lat, lon }) => {
               if (lat > maxLat) {
@@ -139,60 +146,124 @@
           //  console.log(minLat,maxLat,maxLat-minLat,minLon,maxLon,maxLon-minLon)
           const canvas = document.getElementsByTagName("canvas")[0];
           const context = canvas.getContext("2d");
-          canvas.height = canvas.parentNode.clientHeight;
-          canvas.width = canvas.parentNode.clientWidth;
+          const height = (canvas.height = canvas.parentNode.clientHeight);
+          const width = (canvas.width = canvas.parentNode.clientWidth);
+          const rawHeight = maxLat - minLat;
+          const rawWidth = maxLon - minLon;
 
-          const { height, width } = canvas;
-          const scale = Math.min(
-            (height - 20) / (maxLat - minLat),
-            (width - 20) / (maxLon - minLon)
+          const ratio = Math.min(
+            (height - 20) / rawHeight,
+            (width - 20) / rawWidth
           );
-          const pointSize = Math.max(0.6, Math.min(2, 0.75));
-          console.log(scale);
+
+          let scale = 1;
+          let renderScale = ratio * scale;
+          let posX = (width - ratio * rawWidth) / 2;
+          let posY = (height - ratio * rawHeight) / 2;
+
+          document.getElementById("scale").innerHTML = scale * 100 + "%";
           const getXY = (lat, lon) => [
-            (lon - minLon) * scale + 10,
-            height - (lat - minLat) * scale - 10,
+            (lon - minLon) * renderScale + posX,
+            (maxLat - lat) * renderScale + posY,
           ];
 
-          for (const { wayObj, nodeObj, colour } of a) {
-            const nodeMap = new Map();
-            for (const { nodeObj } of wayObj || []) {
-              if (nodeObj.length < 2) {
-                continue;
+          ((X, Y) => {
+            const downFn = (e) => {
+              X = getCoordinate(e, "clientX") - posX;
+              Y = getCoordinate(e, "clientY") - posY;
+              window.addEventListener("mousemove", moveFn);
+              window.addEventListener("mouseup", upFn);
+              window.addEventListener("touchmove", moveFn);
+              window.addEventListener("touchend", upFn);
+            };
+            const moveFn = (e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              posX = getCoordinate(e, "clientX") - X;
+              posY = getCoordinate(e, "clientY") - Y;
+              draw();
+            };
+            const upFn = (e) => {
+              window.removeEventListener("mousemove", moveFn);
+              window.removeEventListener("mouseup", upFn);
+              window.removeEventListener("touchmove", moveFn);
+              window.removeEventListener("touchend", upFn);
+            };
+            canvas.addEventListener("mousedown", downFn);
+            canvas.addEventListener("touchstart", downFn);
+          })(0, 0);
+
+          canvas.onwheel = ({ deltaY, clientX, clientY }) => {
+            clientX -= posX;
+            clientY -= posY;
+            if (deltaY < 0) {
+              posX -= clientX;
+              posY -= clientY;
+              scale *= 2;
+            } else {
+              if (scale <= 1) {
+                return;
               }
-              context.beginPath();
-              context.strokeStyle = colour || "#000";
-              let isStart = true;
-              for (const { lat, lon, name } of nodeObj) {
-                (isStart ? context.moveTo : context.lineTo).apply(
-                  context,
-                  getXY(lat, lon)
-                );
-                isStart = false;
+              scale /= 2;
+              posX += clientX / 2;
+              posY += clientY / 2;
+            }
+            renderScale = ratio * scale;
+            document.getElementById("scale").innerHTML = scale * 100 + "%";
+            draw();
+          };
+
+          const draw = () => {
+            context.clearRect(0, 0, width, height);
+            // 轨道宽度比例
+            context.lineWidth = Math.max(1, renderScale * 143.5);
+            const pointSize = Math.max(1, renderScale * 500);
+            const textSet = new Set();
+            for (const { wayObj, nodeObj, colour } of lineData) {
+              const nodeMap = new Map();
+              for (const { nodeObj } of wayObj || []) {
+                if (nodeObj.length < 2) {
+                  continue;
+                }
+                context.beginPath();
+                context.strokeStyle = colour || "#000";
+                let isStart = true;
+                for (const { lat, lon, name } of nodeObj) {
+                  (isStart ? context.moveTo : context.lineTo).apply(
+                    context,
+                    getXY(lat, lon)
+                  );
+                  isStart = false;
+                  if (name) {
+                    nodeMap.set(`${lat},${lon}`, { lat, lon, name });
+                  }
+                }
+                context.stroke();
+              }
+              for (const { lat, lon, name } of nodeObj || []) {
                 if (name) {
                   nodeMap.set(`${lat},${lon}`, { lat, lon, name });
                 }
               }
-              context.stroke();
-            }
-            for (const { lat, lon, name } of nodeObj || []) {
-              if (name) {
-                nodeMap.set(`${lat},${lon}`, { lat, lon, name });
+              if (renderScale > 0.0002) {
+                for (const [k, { lat, lon, name }] of nodeMap) {
+                  context.beginPath();
+                  context.arc(...getXY(lat, lon), pointSize, 0, 2 * Math.PI);
+                  context.fillStyle = "#ff0"; //设置填充颜色
+                  context.fill(); //开始填充
+                  if (renderScale > 0.0005 && !textSet.has(name)) {
+                    context.fillStyle = "#000"; //设置填充颜色
+                    context.font = "16px serif";
+                    context.fillText(name, ...getXY(lat, lon));
+                    textSet.add(name);
+                  }
+                  context.stroke();
+                }
               }
             }
-            for (const [k, { lat, lon, name }] of nodeMap) {
-              context.beginPath();
-              context.arc(...getXY(lat, lon), pointSize, 0, 2 * Math.PI);
-              // context.fillStyle = "#ff0"; //设置填充颜色
-              context.fill(); //开始填充
-              // context.fillStyle = "#000"; //设置填充颜色
-              // context.font = "16px serif";
-              // context.fillText(name, ...getXY(lat, lon));
-              context.stroke();
-            }
-            //break
-          }
-          //   console.log(...a);
+            //   console.log(...a);
+          };
+          draw();
         });
     fn(`[out:json]
 ;
