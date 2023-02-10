@@ -18,8 +18,8 @@
     </div>
   </body>
   <script>
-    const getCoordinate = (e, key, index = 0) =>
-      e[key] ?? (e.changedTouches || e.touches || [])[index][key];
+    const getCoordinate = (e, key) =>
+      e[key] ?? (e.changedTouches || e.touches || [])[0][key];
     //fetch("gzdt.json")
     var fn = (body) =>
       // fetch("https://z.overpass-api.de/api/interpreter", {
@@ -168,13 +168,19 @@
           canvas.parentNode.style.width = width + "px";
           document.getElementById("scale").innerHTML = scale * 100 + "%";
 
-          ((X, Y) => {
+          ((X, Y, X2, Y2) => {
             let lastDownTime = 0;
-            let isDblclick = false;
+            let isDblclick = false;// 1.双击 2.单指缩放 3.双指缩放
             const downFn = (e) => {
               e.preventDefault();
               isDblclick =
                 -(lastDownTime - (lastDownTime = new Date().getTime())) < 300;
+                console.log(isDblclick,e.touches,Array.isArray(e.touches))
+              if ( e.touches?.length > 1) {
+                X2 = e.touches[1].clientX;
+                Y2 = e.touches[1].clientY;
+                console.log(X2, Y2);
+              }
 
               X = getCoordinate(e, "clientX") - posX;
               Y = getCoordinate(e, "clientY") - posY;
@@ -185,14 +191,13 @@
             };
             const moveFn = (e) => {
               e.stopPropagation();
-              e.preventDefault();
               posX = getCoordinate(e, "clientX") - X;
               posY = getCoordinate(e, "clientY") - Y;
-              draw();
+              drawFn();
             };
             const upFn = (e) => {
               if (isDblclick && new Date().getTime() - lastDownTime < 300) {
-                canvas.onwheel(e);
+                scaleFn(1.6, e);
               }
               window.removeEventListener("mousemove", moveFn);
               window.removeEventListener("mouseup", upFn);
@@ -201,30 +206,22 @@
             };
             canvas.addEventListener("mousedown", downFn);
             canvas.addEventListener("touchstart", downFn);
-          })(0, 0);
+          })(0, 0, 0, 0);
 
-          canvas.onwheel = (e) => {
-            const deltaY = (e.deltaY || -100) / 100;
-            const clientX = getCoordinate(e, "clientX") - posX;
-            const clientY = getCoordinate(e, "clientY") - posY;
-            if (deltaY > 0) {
-              if (scale <= 1) {
-                return;
-              }
-              scale /= 2 * deltaY;
-              posX += (clientX / 2) * deltaY;
-              posY += (clientY / 2) * deltaY;
-            } else {
-              posX += clientX * deltaY;
-              posY += clientY * deltaY;
-              scale *= -2 * deltaY;
-            }
+          canvas.onwheel = (e) => scaleFn(Math.pow(2, e.deltaY / -100), e);
+          const scaleFn = (multi, e) => {
+            // if (multi < 1 && scale <= 1) {
+            //   return;
+            // }
+            posX -= (getCoordinate(e, "clientX") - posX) * (multi - 1);
+            posY -= (getCoordinate(e, "clientY") - posY) * (multi - 1);
+            scale *= multi;
             renderScale = ratio * scale;
             document.getElementById("scale").innerHTML = scale * 100 + "%";
-            draw();
+            drawFn();
           };
 
-          const draw = () => {
+          const drawFn = () => {
             context.clearRect(0, 0, width, height);
             // 轨道宽度比例
             context.lineWidth = Math.max(1, renderScale * 143.5);
@@ -279,7 +276,7 @@
             }
             //   console.log(...a);
           };
-          draw();
+          drawFn();
         });
     fn(`[out:json]
 ;
